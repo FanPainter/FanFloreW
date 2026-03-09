@@ -1,2 +1,8 @@
 # obsidian config folder
 .obsidian
+
+# private folder
+/WorkPrivate/
+
+# Resources Folder
+Resources
