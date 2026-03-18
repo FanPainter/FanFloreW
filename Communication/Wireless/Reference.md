@@ -1,0 +1,3 @@
+- 《802.11 无线网络权威指南》第二版
+	- 原文书：http://www.oreilly.comlcatalog/802dot112/ 
+	- 中文书：http://www.oreilly.com.tw/product_network.php?id=a183
