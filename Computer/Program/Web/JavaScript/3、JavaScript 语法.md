@@ -940,4 +940,603 @@ asyncCount();
 ```
 Symbol.asyncIterator 是 ES2018 规范定义的，因此只有版本非常新的浏览器支持它。
 
+#### Symbol.hasInstance
 
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个方法，该方法决定一个构造器对象是否认可一个对象是它的实例。由 instanceof 操作符使用”。instanceof 操作符可以用来确定一个对象实例的原型链上是否有原型。instanceof 的典型使用场景如下
+```js
+function Foo() {} 
+let f = new Foo(); 
+console.log(f instanceof Foo); // true 
+ 
+class Bar {} 
+let b = new Bar(); 
+console.log(b instanceof Bar); // true
+```
+在 ES6 中，instanceof 操作符会使用 Symbol.hasInstance 函数来确定关系。以 Symbol.hasInstance 为键的函数会执行同样的操作，只是操作数对调了一下
+```js
+function Foo() {} 
+let f = new Foo(); 
+console.log(Foo[Symbol.hasInstance](f)); // true 
+ 
+class Bar {} 
+let b = new Bar(); 
+console.log(Bar[Symbol.hasInstance](b)); // true 
+```
+
+这个属性定义在 Function的原型上，因此默认在所有函数和类上都可以调用。由于 instanceof 操作符会在原型链上寻找这个属性定义，就跟在原型链上寻找其他属性一样，因此可以在继承的类上通过静态方法重新定义这个函数
+```js
+class Bar {}  
+class Baz extends Bar { 
+  static [Symbol.hasInstance]() { 
+    return false; 
+  } 
+} 
+ 
+let b = new Baz(); 
+console.log(Bar[Symbol.hasInstance](b)); // true 
+console.log(b instanceof Bar);           // true 
+console.log(Baz[Symbol.hasInstance](b)); // false 
+console.log(b instanceof Baz);           // false 
+```
+
+#### Symbol.isConcatSpreadable
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个布尔值，如果是 true，则意味着对象应该用 Array.prototype.concat()打平其数组元素”。ES6 中的 Array.prototype.concat()方法会根据接收到的对象类型选择如何将一个类数组对象拼接成数组实例。覆盖 Symbol.isConcatSpreadable 的值可以修改这个行为。 
+
+数组对象默认情况下会被打平到已有的数组，false或假值会导致整个对象被追加到数组末尾。类数组对象默认情况下会被追加到数组末尾，true 或真值会导致这个类数组对象被打平到数组实例。其他不是类数组对象的对象在 Symbol.isConcatSpreadable 被设置为 true 的情况下将被忽略。 
+```js
+let initial = ['foo']; 
+ 
+let array = ['bar']; 
+console.log(array[Symbol.isConcatSpreadable]);  // undefined 
+console.log(initial.concat(array));             // ['foo', 'bar'] 
+array[Symbol.isConcatSpreadable] = false; 
+console.log(initial.concat(array));             // ['foo', Array(1)] 
+
+let arrayLikeObject = { length: 1, 0: 'baz' }; 
+console.log(arrayLikeObject[Symbol.isConcatSpreadable]);  // undefined 
+console.log(initial.concat(arrayLikeObject));             // ['foo', {...}] 
+arrayLikeObject[Symbol.isConcatSpreadable] = true; 
+console.log(initial.concat(arrayLikeObject));             // ['foo', 'baz'] 
+ 
+let otherObject = new Set().add('qux'); 
+console.log(otherObject[Symbol.isConcatSpreadable]);  // undefined 
+console.log(initial.concat(otherObject));             // ['foo', Set(1)] 
+otherObject[Symbol.isConcatSpreadable] = true; 
+console.log(initial.concat(otherObject));             // ['foo'] 
+```
+
+#### Symbol.iterator
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个方法，该方法返回对象默认的迭代器。由 for-of 语句使用”。换句话说，这个符号表示实现迭代器 API 的函数。 
+
+for-of 循环这样的语言结构会利用这个函数执行迭代操作。循环时，它们会调用以 Symbol.iterator 为键的函数，并默认这个函数会返回一个实现迭代器 API 的对象。很多时候，返回的对象是实现该 API 的 Generator
+```js
+class Foo {  
+  *[Symbol.iterator]() {} 
+} 
+ 
+let f = new Foo(); 
+ 
+console.log(f[Symbol.iterator]()); 
+// Generator {<suspended>} 
+```
+
+技术上，这个由 Symbol.iterator 函数生成的对象应该通过其 next()方法陆续返回值。可以通过显式地调用 next()方法返回，也可以隐式地通过生成器函数返回
+```js
+class Emitter {  
+  constructor(max) { 
+    this.max = max; 
+    this.idx = 0; 
+  } 
+ 
+  *[Symbol.iterator]() { 
+    while(this.idx < this.max) { 
+      yield this.idx++; 
+    } 
+  } 
+} 
+ 
+function count() { 
+  let emitter = new Emitter(5); 
+ 
+  for (const x of emitter) { 
+    console.log(x); 
+  } 
+} 
+ 
+count(); 
+// 0 
+// 1 
+// 2 
+// 3 
+// 4 
+```
+
+#### Symbol.match
+
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个正则表达式方法，该方法用正则表达式去匹配字符串。由 String.prototype.match()方法使用”。String.prototype.match()方法会使用以 Symbol.match 为键的函数来对正则表达式求值。正则表达式的原型上默认有这个函数的定义，因此所有正则表达式实例默认是这个 String方法的有效参数
+```js
+console.log(RegExp.prototype[Symbol.match]); 
+// ƒ [Symbol.match]() { [native code] } 
+ 
+console.log('foobar'.match(/bar/)); 
+// ["bar", index: 3, input: "foobar", groups: undefined] 
+```
+
+给这个方法传入非正则表达式值会导致该值被转换为 RegExp对象。如果想改变这种行为，让方法直接使用参数，则可以重新定义 Symbol.match 函数以取代默认对正则表达式求值的行为，从而让 match()方法使用非正则表达式实例。Symbol.match 函数接收一个参数，就是调用 match()方法的字符串实例。返回的值没有限制
+```js
+class FooMatcher {  
+  static [Symbol.match](target) { 
+    return target.includes('foo'); 
+  } 
+} 
+ 
+console.log('foobar'.match(FooMatcher)); // true 
+console.log('barbaz'.match(FooMatcher)); // false 
+ 
+class StringMatcher { 
+  constructor(str) { 
+    this.str = str; 
+  } 
+ 
+  [Symbol.match](target) { 
+    return target.includes(this.str); 
+  } 
+} 
+ 
+console.log('foobar'.match(new StringMatcher('foo'))); // true 
+console.log('barbaz'.match(new StringMatcher('qux'))); // false 
+```
+
+#### Symbol.replace
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个正则表达式方法，该方法替换一个字符串中匹配的子串。由 String.prototype.replace()方法使用”。String.prototype.replace() 方法会使用以 Symbol.replace 为键的函数来对正则表达式求值。正则表达式的原型上默认有这个函数的定义，因此所有正则表达式实例默认是这个 String方法的有效参数
+```js
+console.log(RegExp.prototype[Symbol.replace]); 
+// ƒ [Symbol.replace]() { [native code] } 
+ 
+console.log('foobarbaz'.replace(/bar/, 'qux')); 
+// 'fooquxbaz' 
+```
+
+给这个方法传入非正则表达式值会导致该值被转换为 RegExp对象。如果想改变这种行为，让方法直接使用参数，可以重新定义 Symbol.replace 函数以取代默认对正则表达式求值的行为，从而让 replace()方法使用非正则表达式实例。Symbol.replace 函数接收两个参数，即调用 replace()方法的字符串实例和替换字符串。返回的值没有限制
+```js
+class FooReplacer { 
+  static [Symbol.replace](target, replacement) { 
+    return target.split('foo').join(replacement); 
+  } 
+}  
+ 
+console.log('barfoobaz'.replace(FooReplacer, 'qux')); 
+// "barquxbaz" 
+ 
+class StringReplacer { 
+  constructor(str) { 
+    this.str = str; 
+  } 
+ 
+  [Symbol.replace](target, replacement) { 
+    return target.split(this.str).join(replacement); 
+  } 
+} 
+ 
+console.log('barfoobaz'.replace(new StringReplacer('foo'), 'qux')); 
+// "barquxbaz" 
+```
+
+#### Symbol.search
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个正则表达式方法，该方法返回字符串中匹配正则表达式的索引。由 String.prototype.search()方法使用”。String.prototype.search() 方法会使用以 Symbol.search 为键的函数来对正则表达式求值。正则表达式的原型上默认有这个函数的定义，因此所有正则表达式实例默认是这个 String方法的有效参数
+```js
+console.log(RegExp.prototype[Symbol.search]); 
+// ƒ [Symbol.search]() { [native code] } 
+ 
+console.log('foobar'.search(/bar/)); 
+// 3 
+```
+
+给这个方法传入非正则表达式值会导致该值被转换为 RegExp对象。如果想改变这种行为，让方法直接使用参数，可以重新定义 Symbol.search 函数以取代默认对正则表达式求值的行为，从而让 search()方法使用非正则表达式实例。Symbol.search 函数接收一个参数，就是调用 match()方法的字符串实例。返回的值没有限制
+```js
+class FooSearcher {  
+  static [Symbol.search](target) { 
+    return target.indexOf('foo'); 
+  } 
+}
+
+console.log('foobar'.search(FooSearcher)); // 0 
+console.log('barfoo'.search(FooSearcher)); // 3 
+console.log('barbaz'.search(FooSearcher)); // -1 
+ 
+class StringSearcher { 
+  constructor(str) { 
+    this.str = str; 
+  } 
+ 
+  [Symbol.search](target) { 
+    return target.indexOf(this.str); 
+  } 
+} 
+ 
+console.log('foobar'.search(new StringSearcher('foo'))); // 0 
+console.log('barfoo'.search(new StringSearcher('foo'))); // 3 
+console.log('barbaz'.search(new StringSearcher('qux'))); // -1 
+```
+
+#### Symbol.species
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个函数值，该函数作为创建派生对象的构造函数”。这个属性在内置类型中最常用，用于对内置类型实例方法的返回值暴露实例化派生对象的方法。用 Symbol.species定义静态的获取器（getter）方法，可以覆盖新创建实例的原型定义
+```js
+class Bar extends Array {}  
+class Baz extends Array { 
+  static get [Symbol.species]() { 
+    return Array; 
+  } 
+} 
+ 
+let bar = new Bar(); 
+console.log(bar instanceof Array); // true 
+console.log(bar instanceof Bar);   // true 
+bar = bar.concat('bar'); 
+console.log(bar instanceof Array); // true 
+console.log(bar instanceof Bar);   // true 
+ 
+let baz = new Baz(); 
+console.log(baz instanceof Array); // true 
+console.log(baz instanceof Baz);   // true 
+baz = baz.concat('baz'); 
+console.log(baz instanceof Array); // true 
+console.log(baz instanceof Baz);   // false 
+```
+
+#### Symbol.split
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个正则表达式方法，该方法在匹配正则表达式的索引位置拆分字符串。由 String.prototype.split()方法使用”。String.prototype.split()方法会使用以 Symbol.split 为键的函数来对正则表达式求值。正则表达式的原型上默认有这个函数的定义，因此所有正则表达式实例默认是这个 String 方法的有效参数
+```js
+console.log(RegExp.prototype[Symbol.split]); 
+// ƒ [Symbol.split]() { [native code] } 
+ 
+console.log('foobarbaz'.split(/bar/)); 
+// ['foo', 'baz'] 
+```
+
+给这个方法传入非正则表达式值会导致该值被转换为 RegExp对象。如果想改变这种行为，让方法直接使用参数，可以重新定义 Symbol.split函数以取代默认对正则表达式求值的行为，从而让 split() 方法使用非正则表达式实例。Symbol.split 函数接收一个参数，就是调用 match()方法的字符串实例。返回的值没有限制
+```js
+class FooSplitter {  
+  static [Symbol.split](target) { 
+    return target.split('foo'); 
+  } 
+} 
+ 
+console.log('barfoobaz'.split(FooSplitter)); 
+// ["bar", "baz"] 
+ 
+class StringSplitter { 
+  constructor(str) { 
+    this.str = str; 
+  } 
+ 
+  [Symbol.split](target) { 
+    return target.split(this.str); 
+  } 
+} 
+ 
+console.log('barfoobaz'.split(new StringSplitter('foo'))); 
+// ["bar", "baz"] 
+```
+
+#### Symbol.toPrimitive
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个方法，该方法将对象转换为相应的原始值。由 ToPrimitive抽象操作使用”。很多内置操作都会尝试强制将对象转换为原始值，包括字符串、数值和未指定的原始类型。对于一个自定义对象实例，通过在这个实例的 Symbol.toPrimitive 属性上定义一个函数可以改变默认行为。 
+
+根据提供给这个函数的参数（string、number或 default），可以控制返回的原始值
+```js
+class Foo {}  
+let foo = new Foo(); 
+ 
+console.log(3 + foo);       // "3[object Object]" 
+console.log(3 - foo);       // NaN 
+console.log(String(foo));   // "[object Object]" 
+ 
+class Bar { 
+  constructor() { 
+    this[Symbol.toPrimitive] = function(hint) { 
+      switch (hint) { 
+        case 'number': 
+          return 3; 
+        case 'string': 
+          return 'string bar'; 
+        case 'default': 
+        default: 
+          return 'default bar'; 
+      } 
+    } 
+  } 
+} 
+
+let bar = new Bar(); 
+ 
+console.log(3 + bar);     // "3default bar" 
+console.log(3 - bar);     // 0 
+console.log(String(bar)); // "string bar" 
+```
+
+#### Symbol.toStringTag
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个字符串，该字符串用于创建对象的默认字符串描述。由内置方法 Object.prototype.toString()使用”。 
+
+通过 toString()方法获取对象标识时，会检索由 Symbol.toStringTag 指定的实例标识符，默认为"Object"。内置类型已经指定了这个值，但自定义类实例还需要明确定义
+```js
+let s = new Set(); 
+ 
+console.log(s);                      // Set(0) {} 
+console.log(s.toString());           // [object Set] 
+console.log(s[Symbol.toStringTag]);  // Set 
+ 
+class Foo {}  
+let foo = new Foo(); 
+ 
+console.log(foo);                      // Foo {} 
+console.log(foo.toString());           // [object Object] 
+console.log(foo[Symbol.toStringTag]);  // undefined 
+ 
+class Bar { 
+  constructor() { 
+    this[Symbol.toStringTag] = 'Bar'; 
+  } 
+} 
+let bar = new Bar(); 
+ 
+console.log(bar);                      // Bar {} 
+console.log(bar.toString());           // [object Bar] 
+console.log(bar[Symbol.toStringTag]);  // Bar 
+```
+
+#### Symbol.unscopables
+根据 ECMAScript 规范，这个符号作为一个属性表示“一个对象，该对象所有的以及继承的属性，都会从关联对象的 with 环境绑定中排除”。设置这个符号并让其映射对应属性的键值为 true，就可以阻止该属性出现在 with 环境绑定中，如下例所示
+```js
+let o = { foo: 'bar' }; 
+ 
+with (o) {  
+  console.log(foo); // bar 
+} 
+ 
+o[Symbol.unscopables] = { 
+  foo: true 
+}; 
+ 
+with (o) { 
+  console.log(foo); // ReferenceError 
+} 
+```
+
+不推荐使用 with，因此也不推荐使用 Symbol.unscopables。
+
+### Object 类型
+ECMAScript 中的对象其实就是一组数据和功能的集合。对象通过 new 操作符后跟对象类型的名称来创建。开发者可以通过创建 Object 类型的实例来创建自己的对象，然后再给对象添加属性和方法
+```js
+let o = new Object();
+```
+ECMAScript 只要求在给构造函数提供参数时使用括号。如果没有参数，那么完全可以省略括号（不推荐）
+```js
+let o = new Object;  // 合法，但不推荐 
+```
+
+Object 的实例本身并不是很有用，但理解与它相关的概念非常重要。类似 Java 中的 java.lang.Object，ECMAScript 中的 Object 也是派生其他对象的基类。Object 类型的所有属性和方法在派生的对象上同样存在。 
+
+每个 Object实例都有如下属性和方法
+- **constructor**：用于创建当前对象的函数。在前面的例子中，这个属性的值就是 Object() 函数。 
+- **hasOwnProperty(propertyName)**：用于判断当前对象实例（不是原型）上是否存在给定的属性。要检查的属性名必须是字符串（如 o.hasOwnProperty("name")）或符号。
+- **isPrototypeOf(object)**：用于判断当前对象是否为另一个对象的原型。
+- **propertyIsEnumerable(propertyName)**：用于判断给定的属性是否可以使用 for-in 语句枚举。与 hasOwnProperty()一样，属性名必须是字符串。 
+- **toLocaleString()**：返回对象的字符串表示，该字符串反映对象所在的本地化执行环境。 
+- **toString()**：返回对象的字符串表示。 
+- **valueOf()**：返回对象对应的字符串、数值或布尔值表示。通常与 toString()的返回值相同
+因为在 ECMAScript 中 Object 是所有对象的基类，所以任何对象都有这些属性和方法
+
+严格来讲，ECMA-262 中对象的行为不一定适合 JavaScript 中的其他对象。比如浏览器环境中的 BOM 和 DOM 对象，都是由宿主环境定义和提供的宿主对象。而宿主对象不受 ECMA-262 约束，所以它们可能会也可能不会继承 Object。 
+
+## 操作符
+ECMA-262 描述了一组可用于操作数据值的操作符，包括数学操作符（如加、减）、位操作符、关系操作符和相等操作符等。ECMAScript 中的操作符是独特的，因为它们可用于各种值，包括字符串、数值、布尔值，甚至还有对象。在应用给对象时，操作符通常会调用 valueOf()和/或 toString()方法来取得可以计算的值。 
+### 一元操作符
+只操作一个值的操作符叫一元操作符（unary operator）。一元操作符是 ECMAScript 中最简单的操作符。
+#### 递增/递减操作符
+递增和递减操作符直接照搬自 C 语言，但有两个版本：前缀版和后缀版。无论使用前缀递增还是前缀递减操作符，变量的值都会在语句被求值之前改变。（在计算机科学中，这通常被称为具有副作用。）
+```js
+let age = 29; 
+let anotherAge = --age + 2; 
+ 
+console.log(age);         // 28 
+console.log(anotherAge);  // 30
+```
+
+前缀递增和递减在语句中的优先级是相等的，因此会从左到右依次求值。
+
+递增和递减的后缀版语法一样（分别是++和--），只不过要放在变量后面。后缀版与前缀版的主要区别在于，后缀版递增和递减在语句被求值后才发生。在某些情况下，这种差异没什么影响。可是，在跟其他操作混合时，差异就会变明显
+```js
+let num1 = 2; 
+let num2 = 20; 
+let num3 = num1-- + num2; 
+let num4 = num1 + num2; 
+console.log(num3);  // 22 
+console.log(num4);  // 21 
+```
+
+这 4 个操作符可以作用于任何值，意思是不限于整数——字符串、布尔值、浮点值，甚至对象都可以。递增和递减操作符遵循如下规则。 
+- 对于字符串，如果是有效的数值形式，则转换为数值再应用改变。变量类型从字符串变成数值。 
+- 对于字符串，如果不是有效的数值形式，则将变量的值设置为 NaN 。变量类型从字符串变成数值。 
+- 对于布尔值，如果是 false，则转换为 0 再应用改变。变量类型从布尔值变成数值。 
+- 对于布尔值，如果是 true，则转换为 1 再应用改变。变量类型从布尔值变成数值。 
+- 对于浮点值，加 1 或减 1。 
+- 如果是对象，则调用其 valueOf()方法取得可以操作的值。对得到的值应用上述规则。如果是 NaN，则调用 toString()并再次应用其他规则。变量类型从对象变成数值。 
+
+```js
+let s1 = "2"; 
+let s2 = "z"; 
+let b = false; 
+let f = 1.1; 
+let o = { 
+  valueOf() { 
+    return -1;  
+  } 
+}; 
+ 
+s1++; // 值变成数值 3 
+s2++; // 值变成 NaN 
+b++; // 值变成数值 1 
+f--; // 值变成 0.10000000000000009（因为浮点数不精确） 
+o--;   // 值变成-2 
+```
+
+#### 一元加和减
+一元加和减操作符对大多数开发者来说并不陌生，它们在 ECMAScript 中跟在高中数学中的用途一样。一元加由一个加号（+）表示，放在变量前头，对数值没有任何影响
+
+如果将一元加应用到非数值，则会执行与使用 Number()转型函数一样的类型转换：布尔值 false 和 true转换为 0 和 1，字符串根据特殊规则进行解析，对象会调用它们的 valueOf()和/或 toString() 方法以得到可以转换的值。 
+```js
+let s1 = "01"; 
+let s2 = "1.1"; 
+let s3 = "z"; 
+let b = false; 
+let f = 1.1; 
+let o = { 
+  valueOf() { 
+    return -1; 
+  } 
+}; 
+ 
+s1 = +s1; // 值变成数值 1 
+s2 = +s2; // 值变成数值 1.1 
+s3 = +s3; // 值变成 NaN 
+b = +b; // 值变成数值 0 
+f = +f; // 不变，还是 1.1 
+o = +o;    // 值变成数值-1 
+```
+
+一元减由一个减号（-）表示，放在变量前头，主要用于把数值变成负值。对数值使用一元减会将其变成相应的负值。在应用到非数值时，一元减会遵循与一元加同样的规则，先对它们进行转换，然后再取负值
+```js
+let s1 = "01"; 
+let s2 = "1.1"; 
+let s3 = "z"; 
+let b = false; 
+let f = 1.1; 
+let o = {  
+  valueOf() { 
+    return -1; 
+  } 
+}; 
+ 
+s1 = -s1;  // 值变成数值-1 
+s2 = -s2;  // 值变成数值-1.1 
+s3 = -s3; // 值变成 NaN 
+b = -b; // 值变成数值 0 
+f = -f;    // 变成-1.1 
+o = -o; // 值变成数值 1
+```
+一元加和减操作符主要用于基本的算术，但也可以像上面的例子那样，用于数据类型转换。 
+
+### 位操作符
+
+位操作符用于数值的底层操作，也就是操作内存中表示数据的比特（位）。ECMAScript 中的所有数值都以 IEEE 754 64 位格式存储，**但位操作并不直接应用到 64 位表示，而是先把值转换为 32 位整数，再进行位操作**，之后再把结果转换为 64 位。对开发者而言，就好像只有 32 位整数一样，因为 64 位整数存储格式是不可见的。既然知道了这些，就只需要考虑 32 位整数即可。 
+
+有符号整数使用 32 位的前 31 位表示整数值。第 32 位表示数值的符号，如 0 表示正，1 表示负。这一位称为符号位（sign bit），它的值决定了数值其余部分的格式。正值以真正的二进制格式存储
+
+负值以一种称为二补数（或补码）的二进制编码存储。一个数值的二补数通过如下 3 个步骤计算得到
+1. 确定绝对值的二进制表示（如，对于-18，先确定 18 的二进制表示）；
+2. 找到数值的一补数（或反码），换句话说，就是每个 0 都变成 1，每个 1 都变成 0； 
+3. 给结果加 1。
+
+基于上述步骤确定 -18 的二进制表示
+```
+原码：0000  0000  0000  0000  0000  0000  0001  0010
+反码：1111  1111  1111  1111  1111  1111  1110  1101
+补码：1111  1111  1111  1111  1111  1111  1110  1110
+```
+处理有符号整数时，无法访问第 31 位。 ECMAScript 会记录这些信息。在把负值输出为一个二进制字符串时，会得到一个前面加了减号的绝对值
+```js
+let num = -18; 
+console.log(num.toString(2)); // "-10010" 
+```
+在将-18 转换为二进制字符串时，结果得到-10010。转换过程会求得二补数，然后再以更符合逻辑的形式表示出来。
+
+默认情况下，ECMAScript 中的所有整数都表示为有符号数。不过，确实存在无符号整数。对无符号整数来说，第 32 位不表示符号，因为只有正值。无符号整数比有符号整数的范围更大，因为符号位被用来表示数值了。 
+
+在对 ECMAScript 中的数值应用位操作符时，后台会发生转换：64 位数值会转换为 32 位数值，然后执行位操作，最后再把结果从 32 位转换为 64 位存储起来。整个过程就像处理 32 位数值一样，这让二进制操作变得与其他语言中类似。但这个转换也导致了一个奇特的副作用，即特殊值 NaN和 Infinity 在位操作中都会被当成 0 处理。 
+
+如果将位操作符应用到非数值，那么首先会使用 Number()函数将该值转换为数值（这个过程是自动的），然后再应用位操作。最终结果是数值。 
+#### 按位非
+按位非操作符用波浪符（~）表示，它的作用是返回数值的一补数。按位非是 ECMAScript 中为数不多的几个二进制数学操作符之一。
+```js
+let num1 = 25; // 二进制 00000000000000000000000000011001 
+let num2 = ~num1; // 二进制 11111111111111111111111111100110 
+console.log(num2);  // -26 
+```
+按位非的最终效果是对数值取反并减 1。但位操作的速度快得多。这是因为位操作是在数值的底层表示上完成的。 
+#### 按位与
+按位与操作符用和号（&）表示，有两个操作数。本质上，按位与就是将两个数的每一个位对齐，然后基于真值表中的规则，对每一位执行相应的与操作。 
+#### 按位或
+按位或操作符用管道符（|）表示，同样有两个操作数。
+#### 按位异或
+按位异或用脱字符（^）表示，同样有两个操作数。按位异或与按位或的区别是，它只在一位上是 1 的时候返回 1（两位都是 1 或 0，则返回 0）。
+#### 左移
+左移操作符用两个小于号（<<）表示，会按照指定的位数将数值的所有位向左移动。注意在移位后，数值右端会空出 5 位。左移会以 0 填充这些空位，让结果是完整的 32 位数值。注意，左移会保留它所操作数值的符号。
+#### 有符号右移
+有符号右移由两个大于号（>>）表示，会将数值的所有 32 位都向右移，同时保留符号（正或负）。有符号右移实际上是左移的逆运算。同样，移位后就会出现空位。不过，右移后空位会出现在左侧，且在符号位之后ECMAScript 会用符号位的值来填充这些空位，以得到完整的数值。
+#### 无符号右移
+无符号右移用 3 个大于号表示（>>>），会将数值的所有 32 位都向右移。对于正数，无符号右移与有符号右移结果相同。对于负数，有时候差异会非常大。与有符号右移不同，无符号右移会给空位补 0，而不管符号位是什么。对正数来说，这跟有符号右移效果相同。但对负数来说，结果就差太多了。无符号右移操作符将负数的二进制表示当成正数的二进制表示来处理。因为负数是其绝对值的二补数，所以右移之后结果变得非常之大
+### 布尔操作符
+布尔操作符一共有 3 个：逻辑非、逻辑与和逻辑或。 
+#### 逻辑非
+逻辑非操作符由一个叹号（!）表示，可应用给 ECMAScript 中的任何值。这个操作符始终返回布尔值，无论应用到的是什么数据类型。逻辑非操作符首先将操作数转换为布尔值，然后再对其取反。换句话说，逻辑非操作符会遵循如下规则。
+- 如果操作数是对象，则返回 false。
+- 如果操作数是空字符串，则返回 true。 
+- 如果操作数是非空字符串，则返回 false。 
+- 如果操作数是数值 0，则返回 true。 
+- 如果操作数是非 0 数值（包括 Infinity），则返回 false。 
+- 如果操作数是 null，则返回 true。 
+- 如果操作数是 NaN，则返回 true。 
+- 如果操作数是 undefined，则返回 true。 
+
+```js
+console.log(!false);   // true 
+console.log(!"blue");  // false 
+console.log(!0);       // true 
+console.log(!NaN);     // true 
+console.log(!"");      // true 
+console.log(!12345);   // false 
+```
+
+逻辑非操作符也可以用于把任意值转换为布尔值。同时使用两个叹号（!!），相当于调用了转型函数 Boolean()。无论操作数是什么类型，第一个叹号总会返回布尔值。第二个叹号对该布尔值取反，从而给出变量真正对应的布尔值。结果与对同一个值使用 Boolean()函数是一样的
+```js
+console.log(!!"blue"); // true 
+console.log(!!0);      // false 
+console.log(!!NaN);    // false 
+console.log(!!"");     // false 
+console.log(!!12345);  // true 
+```
+#### 逻辑与
+逻辑与操作符由两个和号（&&）表示，应用到两个值。逻辑与操作符可用于任何类型的操作数，不限于布尔值。如果有操作数不是布尔值，则逻辑与并不一定会返回布尔值，而是遵循如下规则。 
+- 如果第一个操作数是对象，则返回第二个操作数。 
+- 如果第二个操作数是对象，则只有第一个操作数求值为 true 才会返回该对象。 
+- 如果两个操作数都是对象，则返回第二个操作数。 
+- 如果有一个操作数是 null，则返回 null。 
+- 如果有一个操作数是 NaN，则返回 NaN。 
+- 如果有一个操作数是 undefined，则返回 undefined。 
+
+逻辑与操作符是一种短路操作符，意思就是如果第一个操作数决定了结果，那么永远不会对第二个操作数求值。对逻辑与操作符来说，如果第一个操作数是 false，那么无论第二个操作数是什么值，结果也不可能等于 true。
+
+#### 逻辑或
+逻辑或操作符由两个管道符（||）表示。与逻辑与类似，如果有一个操作数不是布尔值，那么逻辑或操作符也不一定返回布尔值。它遵循如下规则。
+- 如果第一个操作数是对象，则返回第一个操作数。 
+- 如果第一个操作数求值为 false，则返回第二个操作数。 
+- 如果两个操作数都是对象，则返回第一个操作数。 
+- 如果两个操作数都是 null，则返回 null。 
+- 如果两个操作数都是 NaN，则返回 NaN。 
+- 如果两个操作数都是 undefined，则返回 undefined。 
+
+同样与逻辑与类似，逻辑或操作符也具有短路的特性。只不过对逻辑或而言，第一个操作数求值为 true，第二个操作数就不会再被求值了。
+
+利用这个行为，可以避免给变量赋值 null或 undefined。
+```js
+let myObject = preferredObject || backupObject; 
+```
+
+例子中，变量 myObject会被赋予两个值中的一个。其中，preferredObject变量包含首选的值，backupObject 变量包含备用的值。如果 preferredObject 不是 null，则它的值就会赋给 myObject；如果 preferredObject 是 null，则 backupObject 的值就会赋给 myObject。这种模式在 ECMAScript 代码中经常用于变量赋值
+
+### 乘性操作符
+ECMAScript 定义了 3 个乘性操作符：乘法、除法和取模。这些操作符跟它们在 Java、C 语言及 Perl 中对应的操作符作用一样，但在处理非数值时，它们也会包含一些自动的类型转换。如果乘性操作符有不是数值的操作数，则该操作数会在后台被使用 Number()转型函数转换为数值。这意味着空字符串会被当成 0，而布尔值 true 会被当成 1。
+
+#### 乘法操作符
+乘法操作符由一个星号（`*`）表示，可以用于计算两个数值的乘积。其语法类似于 C 语言。不过，乘法操作符在处理特殊值时也有一些特殊的行为。 
+- 如果操作数都是数值，则执行常规的乘法运算，即两个正值相乘是正值，两个负值相乘也是正值，正负符号不同的值相乘得到负值。如果 ECMAScript 不能表示乘积，则返回 Infinity 或 -Infinity。
