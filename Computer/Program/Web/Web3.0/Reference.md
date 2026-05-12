@@ -1,0 +1,2 @@
+- [GitHub - wangschang/web3.0: web3.0知识整理 web3.0知识 web3.0学习资料 web3工作 web3书籍 web3job 区块链知识 blockchain](https://github.com/wangschang/web3.0?tab=readme-ov-file)
+- [(9 封私信) Web3新人必备 | 优质学习资源汇总① - 知乎](https://zhuanlan.zhihu.com/p/672280740)

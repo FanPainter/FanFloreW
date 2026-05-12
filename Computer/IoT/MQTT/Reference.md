@@ -1,0 +1,2 @@
+- [MQTT 协议快速入门 2025：基础知识和实用教程 | EMQ](https://www.emqx.com/zh/blog/the-easiest-guide-to-getting-started-with-mqtt)
+  - [博客 - MQTT 编程 | EMQ](https://www.emqx.com/zh/blog/category/mqtt-programming)

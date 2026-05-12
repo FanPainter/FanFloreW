@@ -1554,6 +1554,356 @@ void clearerr_unlocked(FILE *stream);
 现在有一些高度优化的用户缓冲库，它们通过类似刚刚讨论的实现方式来解决两次拷贝问题。还有一些开发者选择实现自己的用户缓冲方案。但是尽管存在这些不同的解决方式，标准 I/O 仍然很流行。
 # 高级文件 I/O
 
+## 分散/聚集 I/O
+分散/聚集 I/O 是一种可以在单词系统调用中对多个缓冲区输入输出方法，可以把多个缓冲区的数据写到单个数据流，也可以把单个数据流读到多个缓冲区中。其命名的原因在于数据会被分散到指定缓冲区向量，或者从指定缓冲区向量中聚集数据。这种输入输出方法也称为向量 I/O（vector I/O）。前面提到的标准读写系统调用可称为线性 I/O（linear I/O）。与线性I/O相比，分散/聚集 I/O有如下几个优势
+- **编码模式更自然**：如果数据本身是分段的（如预定义的结构体变量），向量I/O提供了直观的数据处理方式
+- **效率更高**：单个向量I/O操作可以取代多个线性I/O操作
+- **性能更好**：除了减少发起的系统调用次数，通过内部优化，向量I/O可以比线性I/O提供更好的性能
+- **支持原子性**：和多个线性I/O操作不同，一个进程可以执行单个向量I/O操作，避免了和其他进程交叉操作的风险
+### readv() 和 writev()
+Linux 实现了 POSIX 1003.1-2001 中定义的一组实现分散/聚集 I/O机制的系统调用。该实现满足了前面所述的所有特性。
+
+readv()函数从文件描述符fd中读取count个段（segment）到参数iov所指定的缓冲区中
+```c
+#include <sys/uio.h>
+
+ssize_t readv(int fd, const struct iovec *iov, int count);
+```
+
+write()函数从参数iov指定的缓冲区中读取count个段的数据，并写入fd中
+```c
+#include <sys/uio.h>
+
+ssize_t writev(int fd, const struct iovec *iov, int count);
+```
+除了同时操作多个缓冲区外，readv()函数和writev()函数的功能分别和read()、write()功能一致。
+
+每个iovec结构体描述一个独立的、物理不连续的缓冲区，称其为段（segment）
+```c
+#include <sys/uio.h>
+
+struct iovec {
+  	void *iov_base;		// 指向buffer开始的pointer
+	size_t iov_len;		// buffer的字节大小
+};
+```
+一组段的集合称为向量（vector）。
+
+每个段描述了内存中所要读写的缓冲区的地址和长度。readv()函数在处理下个缓冲区之前，会填满当前缓冲区的iov_len个字节。writev()函数在处理下个缓冲区之前，会把当前缓冲区所有iov_len个字节数据输出。这两个函数都会顺序处理向量中的段。
+#### 返回值
+操作成功时，readv()函数和writev()函数分别读写的字节数。该返回值应该等于所有count个iov_len的和。出错时，返回-1，并相应设置errno值。这些系统调用可能会返回任何read()和write()可能返回的错误，而且出错时，设置的errno值也与read()、write()相同。此外，标准还定义了另外两种错误场景
+- 由于返回值类型是ssize_t，如果所有count个iov_len的和超出SSIZE_MAX，则不会处理任何数据，返回-1，并把errno值设置为EINVAL
+- POSIX指出count值必须大于0，且小于等于IOV_MAX（IOV_MAX在文件limits.h中定义）。在Linux中，当前IOV_MAX的值是1024。如果count为0，该系统调用会返回0。如果count大于IOV_MAX，不会处理任何数据，返回-1，并把errno值设置为EINVAL。
+
+**优化count值**：在向量I/O操作中，Linux内核必须分配内部数据结构来表示每个段（segment）。一般来说，是基于count的大小动态分配进行的。然而，为了优化，如果count值足够小，内核会在栈上创建一个很小的段数组，通过避免动态分配段内存，从而获得性能上的一些提升。count的阈值一般设置为8，因此如果count值小于或等于8时，向量I/O操作会以一种高效的方式，在进程的内核栈中运行。
+
+大多数情况下，无法选择在指定的向量I/O操作中一次同时传递多少个段。当认为可以试用一个较小值时，选择8或更小的值肯定会得到性能的提升。
+
+##### writec()示例
+向量包含3个段，且每个段包含不同长度的字符串。看如何将这3个段写入一个缓冲区
+```c
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
+#include <sys/uio.h>
+
+int main(void)
+{
+    struct iovec iov[3];
+    ssize_t nr;
+    int fd, i;
+
+    char *buf[] = {
+        "The term buccaneer comes from the word boucan.\n",
+        "A boucan is a wooden frame used for cooking meat.\n",
+        "Buccaneer is the West Indies name for a pirate.\n"};
+
+    fd = open("txts/buccaneer.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd == -1)
+    {
+        perror("open");
+        return 1;
+    }
+
+    // 填充三个iovec 结构体
+    for (i = 0; i < 3; i++)
+    {
+        iov[i].iov_base = buf[i];
+        iov[i].iov_len = strlen(buf[i]) + 1;
+    }
+
+    // 一次调用全部写入
+    nr = writev(fd, iov, 3);
+    if (nr == -1)
+    {
+        perror("wrirtev");
+        return 1;
+    }
+
+    printf("wrote %d bytes\n", nr);
+
+    if (close(fd))
+    {
+        perror("close");
+        return 1;
+    }
+
+    return 0;
+}
+```
+
+```
+gcc main.c -o main
+```
+```
+./main
+```
+```
+cat txts/buccaneer.txt
+```
+- 如果不事先创建buccaneer.txt，那么执行后的权限好像有点不对
+
+##### readv()示例
+```c
+#include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/uio.h>
+
+int main(void)
+{
+    char foo[48], bar[51], baz[49];
+    struct iovec iov[3];
+    ssize_t nr;
+    int fd, i;
+
+    fd = open("txts/buccaneer.txt", O_RDONLY);
+    if (fd == -1)
+    {
+        perror("open");
+        return 1;
+    }
+
+    // 建立iovec结构体
+    iov[0].iov_base = foo;
+    iov[0].iov_len = sizeof(foo);
+    iov[1].iov_base = bar;
+    iov[1].iov_len = sizeof(bar);
+    iov[2].iov_base = baz;
+    iov[2].iov_len = sizeof(baz);
+
+    // 一次调用全部读取
+    nr = readv(fd, iov, 3);
+    if (nr == -1)
+    {
+        perror("readv");
+        return 1;
+    }
+
+    for (i = 0; i < 3; i++)
+        printf("%d: %s", i, (char *)iov[i].iov_base);
+
+    if (close(fd))
+    {
+        perror("close");
+        return 1;
+    }
+
+    return 0;
+}
+```
+##### 实现
+可以在用户空间简单实现readv()函数和writev()函数
+```c
+#include <unistd.h>
+#include <sys/uio.h>
+
+ssize_t naive_writev(int fd, const struct iovec *iov, int count)
+{
+    ssize_t ret = 0;
+    int i;
+    
+    for(i = 0; i < count; i++){
+        ssize_t nr;
+        
+        errno = 0;
+        nr = write(fd, iov[i].iov_base, iov[i].iov_len);
+        if(nr == -1){
+            if(errno == EINTR)
+                continue;
+            ret = -1;
+            break;
+        }
+        ret += nr;
+    }
+    return ret;
+}
+```
+Linux内核不是这么实现的：Linux内核把readv()和writev()作为系统调用实现，在内部使用分散/聚集 I/O模式。实际上，Linux内核中的所有I/O都是向量I/O，read()和write()是作为向量I/O实现的，且向量中只有一个段。
+## Event Poll
+由于poll()和select()的局限，Linux 2.6内核引入了event poll（epoll）机制。虽然epoll的实现比poll()和select()复杂得多，epoll解决了前两个都存在的基本性能问题，并增加了一些新的特性。
+
+对于poll()和select()，每次调用时都需要所有被监听的文件描述符列表。内核必须遍历所有被监视的文件描述符，当这个文件描述符列表变得很大时，每次调用都要遍历列表就变成规模上的瓶颈。
+
+epoll把监听注册从实际监听中分离出来，从而解决了这个问题。一个系统调用会初始化epoll上下文，另一个从上下文中加入或删除监视的文件描述符，第三个执行真正的事件等待（event wait）
+- epoll是在2.5.44开发版内核中加入，该接口最终在2.5.66版本中完成。它是Linux专有的
+### 创建新的epoll实例
+通过epoll_create1()创建epoll上下文
+```c
+#include <sys/epoll.h>
+
+int epoll_create1(int flags);
+// 废弃版本
+int epoll_create(int size);
+```
+调用成功时，epoll_create1()会创建新的epoll实例，并返回和该实例关联的文件描述符。这个文件描述符和真正的文件没有关系，仅仅是为了后续调用epoll而创建的。参数flags支持修改epoll的行为，当前，只有EPOLL_CLOEXEC是个合法的flag，它表示进程被替换时关闭文件描述符。
+
+出错时，返回-1，并设置errno为下列值之一
+- **EINVAL**：参数flags非法
+- **EMFILE**：用户打开的文件数达到上限
+- **ENFILE**：系统打开的文件数达到上限
+- **ENOMEN**：内存不足，无法完成本次操作
+
+epoll_create()是老版本的epoll_create1()的实现，现在已经废弃。它不接收任何标志位，相反，接收size参数，该参数没有用。size之前是用于表示要监视的文件描述符个数；现在，内核可以动态获取数据结构的大小，只要size参数大于0即可。如果size值小于0，会返回EINVAL。如果应用所运行的系统其Linux版本低于Linux内核2.6.27以及glibc 2.9，应该使用老的epoll_create()调用。
+
+epoll的标准调用方式如下
+```c
+int epfd;
+
+epfd = epoll_create1(0);
+if(epfd < 0)
+    perror("epoll_create1");
+```
+完成监视后，epoll_create1()返回的文件描述符需要通过close()调用来关闭。
+### 控制 epoll
+epoll_ctl()函数可以向指定的epoll上下文中加入或删除文件描述符
+```c
+#include <sys/epoll.h>
+
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
+```
+头文件sys/epoll.h中定义了epoll event结构体
+```c
+struct epoll_event {
+    __u32 events;
+    union {
+        void *ptr;
+        int fd;
+        __u32 u32;
+        __u64 u64;
+    } data;
+};
+```
+
+epoll_ctl()调用如果执行成功，会控制和文件描述符epfd关联的epoll实例。参数op指定对fd指向的文件所执行的操作。参数event进一步描述epoll更具体的行为
+- **op有效值**
+    - **EPOLL_CTL_ADD**：把文件描述符fd所指向的文件添加到epfd指定的epoll监听实例集中，监听event中定义的事件
+    - **EPOLL_CTL_DEL**：把文件描述符fd所指向的文件从epfd指定的epoll监听集中删除
+    - **EPOLL_CTL_MOD**：使用event指定的更新事件修改在已有fd上的监听行为
+- epoll_event结构体中的events变量列出了指定文件描述符上要监听的事件。多个监听事件可以通过位或运算同时指定。以下为有效events值
+    - **EPOLLERR**：文件出错。即使没有设置，这个事件也是被监听的
+    - **EPOLLET**：在监听文件上开启边缘触发（edge-triggered）。默认是条件触发（level-triggered）
+    - **EPOLLHUP**：文件被挂起。即使没有设置，这个事件也是被监听的
+    - **EPOLLIN**：文件未阻塞，可读
+    - **EPOLLONESHOT**：在事件生成并处理后，文件不会再被监听。必须通过EPOLL_CTL_MOD指定新的事件掩码，以便重新监听文件
+    - **EPOLLOUT**：文件未阻塞，可写
+    - **EPOLLPRI**：存在高优先级的带外（out-of-band）数据可读。
+- event_poll中的data变量是由用户私有使用。当接收到请求的事件后，data会被返回给用户，通常的用法是把event.data.fd设置为fd，这样可以很容易查看哪个文件描述符触发了事件。当成功时，epoll_ctl()返回0。失败时，返回-1，并相应设置errno为下列值
+    - **EBADF**：epfd不是有效的epoll实例，或者fd不是有效的文件描述符
+    - **EEXIST**：op值设置为EPOLL_CTL_ADD，但是fd已经与epfd关联
+    - **EINVAL**：epfd不是epoll实例，epfd和fd相同，或op无效
+    - **ENOENT**：op值设置为EPOLL_CTL_MOD或EPOLL_CTL_DEL，但是fd没有和epfd关联。
+    - **ENOMEN**：没有足够的内存处理请求。
+    - **EPERM**：fd不支持epoll
+    
+下面的例子中，在epoll实例epfd中加入fd所指向文件的监听事件
+```c
+struct epoll_event event;
+int ret;
+
+event.data.fd = fd;  // return the fd to us later (from epoll_wait)
+event.events = EPOLLIN | EPOLLOUT;
+
+ret = epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &event);
+if(ret)
+    perror("epoll_ctl");
+```
+修改epfd实例中的fd上的一个监听事件
+```c
+struct epoll_event event;
+int ret;
+
+event.data.fd = fd;  // return the fd to us later
+event.events = EPOLLIN;
+
+ret = epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &event);
+if(ret)
+    perror("epoll_ctl");
+```
+从epoll实例epfd中删除在fd上的一个监听事件
+```c
+struct epoll_event event;
+int ret;
+
+ret = epoll_ctl(epfd, EPOLL_CTL_DEL, fd, &event);
+if(ret)
+    perror("epoll_ctl");
+```
+当op设置为EPOLL_CTL_DEL时，由于没有提供事件掩码，event参数可能会是NULL。但是，在2.6.9以前的内核版本中，会检查该参数是否非空。为了和老的内核版本保持兼容，必须传递一个有效的非空指针，该指针不能只是声明。内核2.6.9版本修复了这个bug。
+### 等待 epoll 事件
+
+系统调用 epoll_wait()会等待和指定epoll实例关联的文件描述符上的事件
+```c
+#include <sys/epoll.h>
+
+int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
+```
+当调用epoll_wait()时，等待epoll实例epfd中的文件fd上的事件，时限为timeout毫秒。成功时，events指向描述每个事件的epoll_event结构体的内存，且最多可以有maxevents个事件，返回值是事件数；出错时，返回-1，并将errno设置为以下值
+- **EBADF**：epfd是一个无效的文件描述符
+- **EFAULT**：进程对events所指向的内存没有写权限
+- **EINTR**：系统调用在完成前发生信号中断或超时
+- **EINVAL**：epfd不是有效的epoll实例，或者maxevents值小于或等于0
+如果timeout为0，即使没有事件发生，调用也会立即返回0。如果timeout为-1，调用将一直等待到有事件发生才返回。
+
+当调用返回时，epoll_event结构体中的events变量描述了发生的事件。data变量保留了用户在调用epoll_ctl()前的所有内容。
+##### 完整的epoll_wait()例子
+```c
+#define MAX_EVENTS 64
+
+struct epoll_event *events;
+int nr_events, i, epfd;
+
+events = malloc(sizeof(struct epoll_event) * MAX_EVENTS);
+if(!events)
+{
+    perror("malloc");
+    return 1;
+}
+
+nr_events = epoll_wait(epfd, events, MAX_EVENTS, -1);
+if(nr_events < 0)
+{
+    perror("epoll_wait");
+    free(events);
+    return 1;
+}
+
+for(i = 0; i < nr_events; i++)
+{
+    printf("event=%ld on fd=%d\n", events[i].events, events[i].data.fd);
+    // we now can per events[i].events operate on events[i].data.fd without blocking
+}
+free(events);
+```
+
+
+
+
+
+
 
 
 

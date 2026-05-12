@@ -1,0 +1,21 @@
+filters:
+  and:
+    - file.inFolder("Bases/Papers")
+formulas:
+  标签: ""
+views:
+  - type: table
+    name: 表格
+    order:
+      - file.basename
+      - tags
+      - filepath
+      - url
+    sort: []
+  - type: cards
+    name: 卡片
+    order:
+      - file.name
+      - tags
+      - file.ctime
+      - file.mtime
